@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trello Clone</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+    <style>
+        .list-container { min-height: 50vh; }
+        .card { transition: all 0.3s ease; }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .list { background: #ebecf0; border-radius: 8px; }
+    </style>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-4xl font-bold mb-8 text-gray-800">Trello Clone</h1>
+        
+        <!-- Board Controls -->
+        <div class="mb-8 flex gap-4">
+            <input id="boardTitle" class="p-2 border rounded-lg w-64" placeholder="Board Title">
+            <button onclick="createBoard()" class="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600">New Board</button>
+        </div>
+
+        <!-- Boards Grid -->
+        <div id="boardsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12"></div>
+
+        <!-- Current Board -->
+        <div id="currentBoard" class="hidden">
+            <div class="flex justify-between items-center mb-6">
+                <h2 id="boardName" class="text-3xl font-bold"></h2>
+                <div class="flex gap-2">
+                    <input id="newListName" class="p-2 border rounded-lg w-48" placeholder="New List">
+                    <button onclick="addList()" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600">Add List</button>
+                </div>
+            </div>
+            <div id="listsContainer" class="flex gap-4 overflow-x-auto pb-4"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentBoardId = null;
+        let boardData = {};
+
+        // Load boards
+        fetch('http://localhost:8000/api/boards').then(r => r.json()).then(data => {
+            displayBoards(data);
+        });
+
+        function displayBoards(boards) {
+            const grid = document.getElementById('boardsGrid');
+            grid.innerHTML = boards.map(b => `
+                <div class="bg-white p-6 rounded-xl shadow-lg cursor-pointer hover:shadow-xl transition-all" onclick="loadBoard('${b.id}')">
+                    <h3 class="text-xl font-semibold mb-2">${b.title}</h3>
+                    <p class="text-gray-500">${b.lists?.length || 0} lists</p>
+                </div>
+            `).join('');
+        }
+
+        function createBoard() {
+            const title = document.getElementById('boardTitle').value || 'Untitled Board';
+            fetch('http://localhost:8000/api/boards', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({title})
+            }).then(r => r.json()).then(data => {
+                displayBoards([data]);
+                document.getElementById('boardTitle').value = '';
+            });
+        }
+
+        function loadBoard(boardId) {
+            currentBoardId = boardId;
+            fetch(`http://localhost:8000/api/boards/${boardId}`).then(r => r.json()).then(data => {
+                boardData = data;
+                document.getElementById('boardName').textContent = data.title;
+                document.getElementById('currentBoard').classList.remove('hidden');
+                document.getElementById('boardsGrid').classList.add('hidden');
+                renderLists(data.lists);
+            });
+        }
+
+        function renderLists(lists) {
+            const container = document.getElementById('listsContainer');
+            container.innerHTML = lists.map(list => `
+                <div class="list bg-gray-200 min-w-[300px] p-4 rounded-xl list-container" data-list-id="${list.id}">
+                    <div class="flex justify-between mb-4">
+                        <input class="w-full p-2 bg-transparent border-b border-gray-400 text-lg font-semibold" value="${list.title}" onchange="updateList('${list.id}', this.value)">
+                    </div>
+                    <div class="space-y-3 min-h-[200px] cards-container">
+                        ${list.cards.map(card => `
+                            <div class="card bg-white p-4 rounded-lg shadow-md relative group" data-card-id="${card.id}">
+                                <div class="font-medium mb-1">${card.title}</div>
+                                ${card.description ? `<p class="text-sm text-gray-600 mb-2">${card.description}</p>` : ''}
+                                <div class="flex gap-2 absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-all">
+                                    <button onclick="deleteCard('${list.id}', '${card.id}')" class="text-xs text-red-500 hover:text-red-700">Delete</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div class="mt-4">
+                        <input id="card-${list.id}" class="w-full p-2 border rounded-lg text-sm" placeholder="Add a card">
+                        <button onclick="addCard('${list.id}')" class="w-full mt-2 bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600 text-sm">Add Card</button>
+                    </div>
+                </div>
+            `).join('');
+
+            // Initialize SortableJS drag & drop
+            lists.forEach((list) => {
+                new Sortable(document.querySelector(`[data-list-id="${list.id}"] .cards-container`), {
+                    group: 'kanban',
+                    animation: 200,
+                    onEnd: function(evt) {
+                        const cardId = evt.item.dataset.cardId;
+                        const newListId = evt.to.closest('[data-list-id]').dataset.listId;
+                        const fromListId = evt.from.closest('[data-list-id]').dataset.listId;
+                        if (fromListId !== newListId) {
+                            moveCard(currentBoardId, fromListId, newListId, cardId);
+                        }
+                    }
+                });
+            });
+        }
+
+        function addList() {
+            const name = document.getElementById('newListName').value;
+            if (!name || !currentBoardId) return;
+            
+            fetch(`http://localhost:8000/api/boards/${currentBoardId}/lists`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({title: name})
+            }).then(r => r.json()).then(() => {
+                loadBoard(currentBoardId);
+                document.getElementById('newListName').value = '';
+            });
+        }
+
+        function addCard(listId) {
+            const title = document.getElementById(`card-${listId}`).value;
+            if (!title || !currentBoardId) return;
+            
+            fetch(`http://localhost:8000/api/boards/${currentBoardId}/lists/${listId}/cards`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({title})
+            }).then(() => {
+                loadBoard(currentBoardId);
+                document.getElementById(`card-${listId}`).value = '';
+            });
+        }
+
+        function updateList(listId, title) {
+            fetch(`http://localhost:8000/api/boards/${currentBoardId}/lists/${listId}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({title})
+            });
+        }
+
+        function deleteCard(listId, cardId) {
+            fetch(`http://localhost:8000/api/boards/${currentBoardId}/lists/${listId}/cards/${cardId}`, {
+                method: 'DELETE'
+            }).then(() => loadBoard(currentBoardId));
+        }
+
+        function moveCard(boardId, fromListId, toListId, cardId) {
+            fetch(`http://localhost:8000/api/boards/${boardId}/move-card`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({fromListId, toListId, cardId})
+            });
+        }
+    </script>
+</body>
+</html>
